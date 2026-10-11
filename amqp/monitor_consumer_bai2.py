@@ -7,6 +7,8 @@ from amqp_common import (SENSOR_QUEUE, alerts, connection, consume, parser,
 def show_reading(body):
     data = sensor_values(body)
     print(f"Device: {data['device_id']}", flush=True)
+    if "sent_at" in data:
+        print(f"Sent at: {data['sent_at']}", flush=True)
     print(f"Temperature: {data['temperature']}", flush=True)
     print(f"Humidity: {data['humidity']}", flush=True)
     for warning in alerts(data["temperature"], data["humidity"]):

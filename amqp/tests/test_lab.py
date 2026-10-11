@@ -1,7 +1,8 @@
 """Kiểm thử logic và CLI, không giả lập định tuyến của RabbitMQ."""
 
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import datetime
+from datetime import datetime, timezone
+from functools import partial
 import io
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 import random
 import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -18,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 import amqp_common as common
 from consumer_bai1 import show_message
+from all_alerts_consumer_bai3 import show_alert
 from critical_consumer_bai3 import show_critical
 from monitor_consumer_bai2 import show_reading
 from sensor_producer_bai2 import make_reading
@@ -58,6 +61,8 @@ class SensorTests(unittest.TestCase):
             {"temperature": float("nan")}, {"temperature": float("inf")},
             {"temperature": 10 ** 400}, {"humidity": False},
             {"humidity": float("-inf")}, {"humidity": -0.1}, {"humidity": 100.1},
+            {"sent_at": None}, {"sent_at": "yesterday"},
+            {"sent_at": "2026-10-11T10:00:00"},
         ))
         for payload in invalid:
             with self.subTest(payload=payload[:100]):
@@ -70,7 +75,7 @@ class SensorTests(unittest.TestCase):
         with patch("sensor_producer_bai2.random.uniform", side_effect=rng.uniform):
             samples = [make_reading() for _ in range(30)]
         for data in samples:
-            self.assertEqual(set(data), {"device_id", "temperature", "humidity"})
+            self.assertEqual(set(data), {"device_id", "temperature", "humidity", "sent_at"})
             self.assertEqual(data["device_id"], "sensor01")
             self.assertTrue(20 <= data["temperature"] <= 40)
             self.assertTrue(30 <= data["humidity"] <= 80)
@@ -79,9 +84,25 @@ class SensorTests(unittest.TestCase):
         self.assertGreater(len({sample["humidity"] for sample in samples}), 1)
 
     def test_fixed_values_include_zero_without_becoming_random(self):
-        self.assertEqual(make_reading("sensor02", 0, 0), {
-            "device_id": "sensor02", "temperature": 0, "humidity": 0,
-        })
+        data = make_reading("sensor02", 0, 0)
+        data.pop("sent_at")
+        self.assertEqual(data, {"device_id": "sensor02", "temperature": 0, "humidity": 0})
+
+    def test_generated_send_time_is_current_and_has_timezone(self):
+        before = datetime.now(timezone.utc)
+        data = make_reading()
+        after = datetime.now(timezone.utc)
+        sent_at = datetime.fromisoformat(data["sent_at"])
+        self.assertIsNotNone(sent_at.tzinfo)
+        # Timestamp được làm tròn xuống đến mili giây khi tuần tự hóa.
+        self.assertGreaterEqual(sent_at.timestamp(), before.timestamp() - 0.001)
+        self.assertLessEqual(sent_at.timestamp(), after.timestamp())
+
+    def test_timestamp_accepts_offset_or_utc_and_legacy_payload(self):
+        for stamp in ("2026-10-11T10:00:00.123+07:00", "2026-10-11T03:00:00Z"):
+            with self.subTest(stamp=stamp):
+                self.assertEqual(common.sensor_values(encoded_reading(sent_at=stamp))["sent_at"], stamp)
+        self.assertNotIn("sent_at", common.sensor_values(encoded_reading()))
 
 
 class OutputTests(unittest.TestCase):
@@ -103,6 +124,12 @@ class OutputTests(unittest.TestCase):
             "Device: sensor01", "Temperature: 36.4", "Humidity: 38.9",
             "CANH BAO: Nhiet do cao", "CANH BAO: Do am thap",
         ])
+
+    def test_monitor_prints_send_timestamp(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            show_reading(encoded_reading(sent_at="2026-10-11T10:00:00+07:00"))
+        self.assertIn("Sent at: 2026-10-11T10:00:00+07:00", output.getvalue())
 
     def test_alert_output_identifies_queue_and_preserves_unicode(self):
         for handler, queue in ((show_warning, "warning_queue"),
@@ -159,6 +186,57 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(sent["properties"].content_type, "application/json")
 
 
+class AlertLogTests(unittest.TestCase):
+    def test_log_appends_utf8_json_lines_with_time_and_routing_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nested" / "alerts.jsonl"
+            with redirect_stdout(io.StringIO()):
+                show_alert('Cảnh báo "nhiệt độ"\ndòng hai'.encode(), "warning", log_file=path)
+                show_alert(b"System online", "info", log_file=path)
+            lines = path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 2)
+            records = [json.loads(line) for line in lines]
+            self.assertEqual(records[0]["message"], 'Cảnh báo "nhiệt độ"\ndòng hai')
+            self.assertEqual([row["routing_key"] for row in records], ["warning", "info"])
+            for row in records:
+                self.assertIsNotNone(datetime.fromisoformat(row["received_at"]).tzinfo)
+
+    def test_invalid_utf8_does_not_create_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.jsonl"
+            with self.assertRaises(UnicodeDecodeError):
+                show_alert(b"\xff", "info", log_file=path)
+            self.assertFalse(path.exists())
+
+    def test_log_write_failure_leaves_delivery_unacked(self):
+        channel = Mock()
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            # Mở thư mục như file để tạo lỗi ghi thực tế.
+            common.consume(channel, common.ALL_ALERTS_QUEUE,
+                           partial(show_alert, log_file=directory), include_routing_key=True)
+            callback = channel.basic_consume.call_args.kwargs["on_message_callback"]
+            method = SimpleNamespace(delivery_tag=7, routing_key="warning")
+            with self.assertRaises(OSError):
+                callback(channel, method, None, b"warning")
+        channel.basic_ack.assert_not_called()
+        channel.basic_reject.assert_not_called()
+
+    def test_successful_delivery_is_logged_before_ack(self):
+        channel = Mock()
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            path = Path(directory) / "alerts.jsonl"
+            common.consume(channel, common.ALL_ALERTS_QUEUE,
+                           partial(show_alert, log_file=path), max_messages=1,
+                           include_routing_key=True)
+            def check_log(**kwargs):
+                self.assertEqual(json.loads(path.read_text())["routing_key"], "critical")
+            channel.basic_ack.side_effect = check_log
+            callback = channel.basic_consume.call_args.kwargs["on_message_callback"]
+            callback(channel, SimpleNamespace(delivery_tag=8, routing_key="critical"), None, b"alert")
+            channel.basic_ack.assert_called_once_with(delivery_tag=8)
+            channel.stop_consuming.assert_called_once()
+
+
 class CLITests(unittest.TestCase):
     def launch(self, script, *args):
         env = {key: value for key, value in os.environ.items()
@@ -169,11 +247,11 @@ class CLITests(unittest.TestCase):
                               cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, timeout=10)
 
-    def test_all_seven_scripts_expose_help_without_a_broker(self):
+    def test_all_eight_scripts_expose_help_without_a_broker(self):
         scripts = (
             "producer_bai1.py", "consumer_bai1.py", "sensor_producer_bai2.py",
             "monitor_consumer_bai2.py", "alert_producer_bai3.py",
-            "warning_consumer_bai3.py", "critical_consumer_bai3.py",
+            "warning_consumer_bai3.py", "critical_consumer_bai3.py", "all_alerts_consumer_bai3.py",
         )
         for script in scripts:
             with self.subTest(script=script):
@@ -190,6 +268,11 @@ class CLITests(unittest.TestCase):
             ("sensor_producer_bai2.py", ["--temperature", "nan"]),
             ("sensor_producer_bai2.py", ["--humidity", "101"]),
             ("alert_producer_bai3.py", ["--level", "unknown"]),
+            ("sensor_producer_bai2.py", ["--device-ids", "s1"]),
+            ("sensor_producer_bai2.py", ["--device-ids", "s1", "s1"]),
+            ("sensor_producer_bai2.py", ["--device-ids", "s1", "s2", "s3", "s4"]),
+            ("sensor_producer_bai2.py", ["--device-id", "s1", "--device-ids", "s2", "s3"]),
+            ("all_alerts_consumer_bai3.py", ["--log-file", " "]),
         ):
             with self.subTest(script=script, args=args):
                 result = self.launch(script, *args)

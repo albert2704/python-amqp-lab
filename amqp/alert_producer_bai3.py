@@ -1,7 +1,8 @@
-"""Bài 3: gửi info, warning và critical qua direct exchange."""
+"""Bài 3: gửi cảnh báo qua direct exchange và topic exchange mở rộng."""
 
-from amqp_common import (ALERT_EXCHANGE, ALERT_QUEUES, bind_alert_queue,
-                         connection, declare_alert_exchange, nonempty,
+from amqp_common import (ALERT_EXCHANGE, ALERT_QUEUES, TOPIC_ALERT_EXCHANGE,
+                         bind_alert_queue, connection, declare_alert_exchange,
+                         declare_all_alerts_queue, nonempty,
                          parser, publish, run)
 
 MESSAGES = {
@@ -23,12 +24,14 @@ def main():
         # Tạo binding trước để warning/critical được giữ cả khi consumer chưa chạy.
         for level in ALERT_QUEUES:
             bind_alert_queue(channel, level)
+        declare_all_alerts_queue(channel)
         channel.confirm_delivery()
         for level in ([args.level] if args.level else MESSAGES):
             message = args.message or MESSAGES[level]
-            # info không có queue nhận theo đề bài; cho phép broker bỏ message đó.
+            # Direct exchange vẫn chỉ định tuyến warning/critical như bài gốc.
             publish(channel, level, message, exchange=ALERT_EXCHANGE,
                     mandatory=level != "info")
+            publish(channel, level, message, exchange=TOPIC_ALERT_EXCHANGE)
             print(f"Da gui [{level}]: {message}", flush=True)
 
 

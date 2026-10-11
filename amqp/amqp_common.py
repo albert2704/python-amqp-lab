@@ -2,6 +2,7 @@
 
 import argparse
 from contextlib import contextmanager
+from datetime import datetime
 import json
 import math
 import os
@@ -12,6 +13,8 @@ import pika
 MESSAGE_QUEUE = "iot_lab_queue"
 SENSOR_QUEUE = "sensor_data_queue"
 ALERT_EXCHANGE = "iot_alert_exchange"
+TOPIC_ALERT_EXCHANGE = "iot_alert_topic_exchange"
+ALL_ALERTS_QUEUE = "all_alerts_queue"
 ALERT_QUEUES = {"warning": "warning_queue", "critical": "critical_queue"}
 DEFAULT_URL = "amqp://lab:lab@127.0.0.1:5672/%2F"
 
@@ -102,6 +105,16 @@ def bind_alert_queue(channel, level):
     return queue
 
 
+def declare_all_alerts_queue(channel):
+    """Topic exchange riêng để không đổi kiểu direct exchange đã tồn tại."""
+    channel.exchange_declare(exchange=TOPIC_ALERT_EXCHANGE,
+                             exchange_type="topic", durable=True)
+    channel.queue_declare(queue=ALL_ALERTS_QUEUE, durable=True)
+    channel.queue_bind(queue=ALL_ALERTS_QUEUE, exchange=TOPIC_ALERT_EXCHANGE,
+                       routing_key="#")
+    return ALL_ALERTS_QUEUE
+
+
 def publish(channel, routing_key, body, exchange="", json_payload=False,
             mandatory=True):
     """Gọi channel.confirm_delivery() trước khi gửi để chờ broker xác nhận."""
@@ -118,14 +131,17 @@ def publish(channel, routing_key, body, exchange="", json_payload=False,
     )
 
 
-def consume(channel, queue, handler, max_messages=0):
+def consume(channel, queue, handler, max_messages=0, *, include_routing_key=False):
     """ACK sau xử lý thành công; loại message lỗi để tránh vòng lặp vô hạn."""
     count = 0
 
     def callback(ch, method, properties, body):
         nonlocal count
         try:
-            handler(body)
+            if include_routing_key:
+                handler(body, method.routing_key)
+            else:
+                handler(body)
         except (ValueError, UnicodeError) as exc:
             print(f"Bo qua message khong hop le: {exc}", file=sys.stderr, flush=True)
             ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
@@ -159,6 +175,16 @@ def sensor_values(payload):
             raise ValueError(f"{key} phải là số hữu hạn")
     if not 0 <= data["humidity"] <= 100:
         raise ValueError("humidity phải trong khoảng 0..100")
+    if "sent_at" in data:
+        value = data["sent_at"]
+        if not isinstance(value, str):
+            raise ValueError("sent_at phải là thời gian ISO 8601 có múi giờ")
+        try:
+            sent_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("sent_at phải là thời gian ISO 8601 có múi giờ") from None
+        if sent_at.tzinfo is None:
+            raise ValueError("sent_at phải có múi giờ")
     return data
 
 

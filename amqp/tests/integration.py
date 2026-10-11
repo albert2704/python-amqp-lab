@@ -1,9 +1,10 @@
-"""Kiểm thử cả 7 chương trình với RabbitMQ tạm thời, cần Docker đang chạy.
+"""Kiểm thử cả 8 chương trình với RabbitMQ tạm thời, cần Docker đang chạy.
 
 Chạy từ amqp/: python tests/integration.py
 Tự tạo container trên cổng localhost ngẫu nhiên và xóa khi kiểm thử xong.
 """
 
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 import uuid
@@ -19,7 +21,8 @@ import pika
 
 LAB = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LAB))
-from amqp_common import MESSAGE_QUEUE, SENSOR_QUEUE, ALERT_QUEUES
+from amqp_common import (MESSAGE_QUEUE, SENSOR_QUEUE, ALERT_QUEUES,
+                         ALL_ALERTS_QUEUE, TOPIC_ALERT_EXCHANGE, declare_all_alerts_queue)
 
 
 def docker(*args):
@@ -84,11 +87,14 @@ class RabbitMQLabTests(unittest.TestCase):
                 method, _, body = ch.basic_get(SENSOR_QUEUE, auto_ack=True)
                 self.assertIsNotNone(method)
                 data = json.loads(body)
-                self.assertEqual(set(data), {"device_id", "temperature", "humidity"})
+                self.assertEqual(set(data), {"device_id", "temperature", "humidity", "sent_at"})
                 self.assertEqual(data["device_id"], "sensor01")
                 self.assertTrue(20 <= data["temperature"] <= 40)
                 self.assertTrue(30 <= data["humidity"] <= 80)
                 readings.append(data)
+            sent = [datetime.fromisoformat(row["sent_at"]) for row in readings]
+            self.assertTrue(all(stamp.tzinfo is not None for stamp in sent))
+            self.assertGreaterEqual((sent[1] - sent[0]).total_seconds(), 2.9)
             print("Random sensor samples:", readings)
 
     def test_03_monitor_thresholds_and_invalid_payload(self):
@@ -112,7 +118,7 @@ class RabbitMQLabTests(unittest.TestCase):
             count = conn.channel().queue_declare(queue=SENSOR_QUEUE, passive=True).method.message_count
             self.assertEqual(count, 0)
 
-    def test_04_direct_exchange_routing(self):
+    def test_04_direct_and_topic_exchange_routing(self):
         output = self.run_script("alert_producer_bai3.py")
         for level in ("info", "warning", "critical"):
             self.assertIn(f"Da gui [{level}]", output)
@@ -131,6 +137,18 @@ class RabbitMQLabTests(unittest.TestCase):
             ch = conn.channel()
             for queue in ALERT_QUEUES.values():
                 self.assertEqual(ch.queue_declare(queue=queue, passive=True).method.message_count, 0)
+
+        with tempfile.TemporaryDirectory() as directory:
+            log_file = Path(directory) / "alerts.jsonl"
+            all_alerts = self.run_script("all_alerts_consumer_bai3.py", "--max-messages", "4",
+                                         "--log-file", str(log_file))
+            records = [json.loads(line) for line in log_file.read_text().splitlines()]
+            self.assertEqual([row["routing_key"] for row in records],
+                             ["info", "warning", "critical", "info"])
+            self.assertEqual(all_alerts.count("Da nhan:"), 4)
+            with pika.BlockingConnection(pika.URLParameters(self.url)) as conn:
+                self.assertEqual(conn.channel().queue_declare(
+                    queue=ALL_ALERTS_QUEUE, passive=True).method.message_count, 0)
 
     @unittest.skipIf(os.name == "nt", "Kiểm thử SIGINT này dành cho macOS/Linux")
     def test_05_ctrl_c_shutdown(self):
@@ -168,6 +186,61 @@ class RabbitMQLabTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("Loi AMQP", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+
+    def test_07_two_and_three_sensor_streams(self):
+        for devices in (("sensor01", "sensor02"), ("sensor01", "sensor02", "sensor03")):
+            with self.subTest(devices=devices):
+                output = self.run_script("sensor_producer_bai2.py", "--device-ids", *devices,
+                                         "--count", "2")
+                readings = [json.loads(line.removeprefix("Da gui: "))
+                            for line in output.splitlines() if line.startswith("Da gui: ")]
+                self.assertEqual([row["device_id"] for row in readings], list(devices) * 2)
+                for device in devices:
+                    stamps = [datetime.fromisoformat(row["sent_at"]) for row in readings
+                              if row["device_id"] == device]
+                    self.assertGreaterEqual((stamps[1] - stamps[0]).total_seconds(), 2.9)
+                monitor = self.run_script("monitor_consumer_bai2.py", "--max-messages",
+                                          str(2 * len(devices)))
+                for device in devices:
+                    self.assertEqual(monitor.count(f"Device: {device}\n"), 2)
+                self.assertEqual(monitor.count("Sent at:"), 2 * len(devices))
+
+    def test_08_topic_wildcard_and_append_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log_file = Path(directory) / "alerts.jsonl"
+            for key in ("sensor.room.warning", "info"):
+                with pika.BlockingConnection(pika.URLParameters(self.url)) as conn:
+                    ch = conn.channel()
+                    declare_all_alerts_queue(ch)
+                    ch.confirm_delivery()
+                    ch.basic_publish(exchange=TOPIC_ALERT_EXCHANGE, routing_key=key,
+                                     body='Cảnh báo nhiều dòng\nDòng hai'.encode(), mandatory=True)
+                self.run_script("all_alerts_consumer_bai3.py", "--max-messages", "1",
+                                "--log-file", str(log_file))
+            records = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([row["routing_key"] for row in records], ["sensor.room.warning", "info"])
+            self.assertTrue(all(row["message"] == 'Cảnh báo nhiều dòng\nDòng hai' for row in records))
+
+    def test_09_log_failure_redelivers_alert(self):
+        with pika.BlockingConnection(pika.URLParameters(self.url)) as conn:
+            ch = conn.channel()
+            declare_all_alerts_queue(ch)
+            ch.confirm_delivery()
+            ch.basic_publish(exchange=TOPIC_ALERT_EXCHANGE, routing_key="warning",
+                             body=b"Retry after log failure", mandatory=True)
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, str(LAB / "all_alerts_consumer_bai3.py"),
+                 "--max-messages", "1", "--log-file", directory],
+                env=self.env, capture_output=True, text=True, timeout=20,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertNotIn("Traceback", result.stderr)
+            log_file = Path(directory) / "recovered.jsonl"
+            self.run_script("all_alerts_consumer_bai3.py", "--max-messages", "1",
+                            "--log-file", str(log_file))
+            self.assertEqual(json.loads(log_file.read_text())["message"], "Retry after log failure")
 
 
 if __name__ == "__main__":
