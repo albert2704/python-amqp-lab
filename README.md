@@ -1,8 +1,14 @@
 # Thực hành Python với MQTT
 
-Bộ mã nguồn cho ba bài thực hành: truyền thông điệp, giám sát cảm biến và điều khiển đèn thông minh. Họ tên, mã sinh viên và MQTT broker được cấu hình khi chạy; không cần sửa mã nguồn.
+## 1. Thông tin sinh viên
 
-## 1. Cài đặt
+| Họ và tên | Mã sinh viên |
+| :--- | :---: |
+| Lê Đình Thức | B23DCCN803 |
+| Đỗ Minh Hoàng | B23DCCN328 |
+| Nguyễn Hoàng Quốc Việt | B22DCCN897 |
+
+## 2. Cài đặt
 
 Các chương trình MQTT dùng Python 3.9 trở lên và `paho-mqtt`. Broker Python cục bộ và kiểm thử cần Python 3.10 trở lên.
 
@@ -24,7 +30,7 @@ python -m pip install -r requirements-broker.txt
 
 Mỗi terminal mới cần kích hoạt `.venv`. Nếu đã có broker của lớp, chỉ cần cài `python -m pip install -r requirements.txt`.
 
-## 2. MQTT broker
+## 3. MQTT broker
 
 Mặc định tất cả chương trình kết nối `127.0.0.1:1883`, MQTT 3.1.1 qua TCP, không yêu cầu tài khoản. Chạy broker cục bộ trong một terminal riêng và giữ terminal này mở:
 
@@ -60,13 +66,13 @@ Ví dụ cấu hình broker của lớp trên macOS/Linux; thay địa chỉ b�
 ```bash
 export MQTT_HOST="dia-chi-broker-cua-lop"
 export MQTT_PORT="1883"
-export STUDENT_NAME="Họ tên của bạn"
-export STUDENT_ID="Mã sinh viên của bạn"
+export STUDENT_NAME="Nguyễn Hoàng Quốc Việt"
+export STUDENT_ID="B22DCCN897"
 ```
 
 PowerShell dùng `$env:MQTT_HOST="dia-chi-broker-cua-lop"` và tương tự cho các biến khác. Các biến chỉ áp dụng trong terminal đã đặt chúng. Mọi chương trình hỗ trợ `--host`, `--port`, `--username`, `--password`, `--tls`, `--ca-cert`; dùng `--help` để xem tùy chọn. Khi broker yêu cầu TLS, bật `--tls` và đặt đúng port do broker cung cấp, thường là 8883. Cấu hình tài khoản qua biến môi trường để tránh ghi mật khẩu vào mã nguồn hoặc Git.
 
-## 3. Bài 1 gửi và nhận thông điệp
+## 4. Bài 1 gửi và nhận thông điệp
 
 Terminal A, chạy subscriber trước và chờ dòng `Đang lắng nghe`:
 
@@ -77,7 +83,7 @@ python subscriber_bai1.py
 Terminal B:
 
 ```bash
-python publisher_bai1.py --name "Họ tên của bạn" --student-id "Mã sinh viên của bạn"
+python publisher_bai1.py --name "Nguyễn Hoàng Quốc Việt" --student-id "B22DCCN897"
 ```
 
 Nếu bỏ `--name`/`--student-id` và chưa đặt biến môi trường, chương trình hỏi từ bàn phím. Để gửi nhiều lần:
@@ -91,11 +97,11 @@ Topic: `iot/lab/message`. Subscriber hiển thị topic, lời chào kèm danh t
 ```text
 Nhan duoc message:
 Topic: iot/lab/message
-Payload: Xin chao tu client Python MQTT - Mã sinh viên của bạn - Họ tên của bạn
+Payload: Xin chao tu client Python MQTT - B22DCCN897 - Nguyễn Hoàng Quốc Việt
 Time: 10:15:20
 ```
 
-## 4. Bài 2 mô phỏng cảm biến
+## 5. Bài 2 mô phỏng cảm biến
 
 Terminal A:
 
@@ -129,7 +135,7 @@ CANH BAO: Do am thap
 
 Cảnh báo khi nhiệt độ **> 35** và độ ẩm **< 40**. Tại đúng 35 °C và 40% không cảnh báo. Dữ liệu JSON sai hoặc thiếu trường được thông báo và bỏ qua; monitor tiếp tục chạy. `--count 0` là chạy liên tục, `--interval` đổi chu kỳ nếu cần thử nhanh.
 
-## 5. Bài 3 điều khiển đèn
+## 6. Bài 3 điều khiển đèn
 
 Terminal A, chạy thiết bị trước và chờ dòng `Thiết bị light01 sẵn sàng`:
 
@@ -159,7 +165,7 @@ python controller_bai3.py --commands ON OFF EXIT
 
 Mô hình này dùng một thiết bị `light01` và một controller. Trạng thái retained chỉ là trạng thái được gửi gần nhất, không phải dấu hiệu thiết bị còn online.
 
-## 6. Kiểm tra và kết quả
+## 7. Kiểm tra và kết quả
 
 Nhấn `Ctrl+C` để dừng subscriber, sensor, thiết bị và broker. Publisher hữu hạn tự thoát sau khi broker xác nhận các thông điệp QoS 1. Subscribe được đăng ký lại khi client tự kết nối lại.
 
@@ -175,7 +181,7 @@ Kết quả kiểm tra ngày 10/10/2026 trên macOS với Python 3.14.7: **7/7 k
 
 Nếu gặp `Connection refused`, chạy broker trước và kiểm tra host/port. Nếu gặp `ModuleNotFoundError`, kích hoạt `.venv` và cài file requirements phù hợp. Hai chương trình trong một bài phải dùng cùng broker; chạy subscriber trước publisher để nhận các thông điệp không retained. QoS 1 có thể giao thông điệp nhiều hơn một lần, nên log có thể lặp lại.
 
-## 7. Các file nộp bài
+## 8. Các file nộp bài
 
 - `publisher_bai1.py`, `subscriber_bai1.py`
 - `sensor_publisher_bai2.py`, `monitor_subscriber_bai2.py`
@@ -183,8 +189,6 @@ Nếu gặp `Connection refused`, chạy broker trước và kiểm tra host/por
 - `mqtt_common.py` — module dùng chung, cần đi cùng sáu chương trình
 - `requirements.txt`, `README.md`, `README.txt`
 - `broker_local.py`, `requirements-broker.txt`, `tests/test_lab.py` — broker và kiểm thử tùy chọn
-
-Điền họ tên/mã sinh viên khi demo hoặc bằng biến môi trường. Theo đề, hạn nộp là **23:59 thứ Bảy 10/10/2026**; nộp đường dẫn GitHub qua nhóm Zalo của lớp. Không đưa `.venv`, mật khẩu hoặc file `.env` lên GitHub.
 
 ## Tài liệu thư viện
 

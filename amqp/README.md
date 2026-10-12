@@ -1,5 +1,13 @@
 # Thực hành Python với AMQP / RabbitMQ
 
+## 1. Thông tin sinh viên
+
+| Họ và tên | Mã sinh viên |
+| :--- | :---: |
+| Lê Đình Thức | B23DCCN803 |
+| Đỗ Minh Hoàng | B23DCCN328 |
+| Nguyễn Hoàng Quốc Việt | B22DCCN897 |
+
 Ba bài thực hành dùng Python **3.9 trở lên**, `pika==1.3.2` và RabbitMQ qua AMQP 0-9-1: gửi lời chào, giám sát cảm biến và định tuyến cảnh báo. Cảm biến là mô phỏng; không cần phần cứng. Đã bổ sung toàn bộ phần **Gợi ý mở rộng**: gửi lặp và consumer liên tục, thời gian gửi, nhiều cảm biến, topic consumer nhận mọi cảnh báo và ghi log ra file.
 
 | Bài | Luồng thông điệp |
@@ -9,7 +17,7 @@ Ba bài thực hành dùng Python **3.9 trở lên**, `pika==1.3.2` và RabbitMQ
 | 3 | Alert producer → direct exchange `iot_alert_exchange` → `warning_queue` / `critical_queue` theo routing key |
 | 3 mở rộng | Alert producer → topic exchange `iot_alert_topic_exchange` → `all_alerts_queue` (binding `#`) → console và file log |
 
-## 1. Cài đặt và chạy broker
+## 2. Cài đặt và chạy broker
 
 Mở terminal trong thư mục `amqp/`. Trên macOS/Linux:
 
@@ -40,21 +48,21 @@ Mặc định mọi chương trình dùng `amqp://lab:lab@127.0.0.1:5672/%2F`, t
 
 ```bash
 export AMQP_URL='amqp://USER:PASSWORD@HOST:5672/VHOST'
-export STUDENT_NAME='Họ tên của bạn'
-export STUDENT_ID='Mã sinh viên của bạn'
+export STUDENT_NAME='Nguyễn Hoàng Quốc Việt'
+export STUDENT_ID='B22DCCN897'
 ```
 
 PowerShell:
 
 ```powershell
 $env:AMQP_URL='amqp://USER:PASSWORD@HOST:5672/VHOST'
-$env:STUDENT_NAME='Họ tên của bạn'
-$env:STUDENT_ID='Mã sinh viên của bạn'
+$env:STUDENT_NAME='Nguyễn Hoàng Quốc Việt'
+$env:STUDENT_ID='B22DCCN897'
 ```
 
 Thay các giá trị viết hoa bằng cấu hình thực tế; URL-encode riêng tên đăng nhập, mật khẩu và tên vhost nếu có ký tự đặc biệt. Tệp `.env` **không được chương trình Python tự động nạp**. Không đưa mật khẩu thật vào Git. Khi dùng broker chung, nên xin vhost riêng: các consumer cùng queue trong cùng vhost sẽ chia nhau nhận thông điệp.
 
-## 2. Bài 1 — Gửi và nhận lời chào
+## 3. Bài 1 — Gửi và nhận lời chào
 
 Terminal A:
 
@@ -65,7 +73,7 @@ python consumer_bai1.py
 Terminal B:
 
 ```bash
-python producer_bai1.py --name "Họ tên của bạn" --student-id "Mã sinh viên của bạn"
+python producer_bai1.py --name "Nguyễn Hoàng Quốc Việt" --student-id "B22DCCN897"
 ```
 
 Producer ưu tiên `--name` và `--student-id`, sau đó đến `STUDENT_NAME` / `STUDENT_ID`; thông tin còn thiếu được hỏi từ bàn phím. Mặc định gửi một lời chào. Gửi ba lần cách nhau một giây:
@@ -79,11 +87,11 @@ python producer_bai1.py --count 3 --interval 1
 Ví dụ kết quả mong đợi, với thời gian nhận minh họa:
 
 ```text
-Da nhan message: Xin chao tu ung dung Python AMQP - Mã sinh viên của bạn - Họ tên của bạn
+Da nhan message: Xin chao tu ung dung Python AMQP - B22DCCN897 - Nguyễn Hoàng Quốc Việt
 Thoi gian nhan: 10:15:20
 ```
 
-## 3. Bài 2 — Mô phỏng cảm biến và cảnh báo
+## 4. Bài 2 — Mô phỏng cảm biến và cảnh báo
 
 Terminal A:
 
@@ -135,7 +143,7 @@ Mỗi vòng gửi một message riêng cho từng cảm biến rồi chờ `--in
 
 `sent_at` lấy giờ và múi giờ máy chạy producer, được monitor hiển thị cùng dữ liệu. Monitor vẫn nhận payload cũ chỉ có ba trường; nếu có `sent_at` thì giá trị phải là thời gian ISO 8601 hợp lệ, có múi giờ.
 
-## 4. Bài 3 — Định tuyến theo mức cảnh báo
+## 5. Bài 3 — Định tuyến theo mức cảnh báo
 
 Terminal A:
 
@@ -207,7 +215,7 @@ python all_alerts_consumer_bai3.py --log-file logs/demo.jsonl --max-messages 3
 
 Đường dẫn log tính từ thư mục terminal đang chạy; thư mục cha được tạo tự động. Chương trình ghi nối tiếp, giữ các dòng cũ qua lần chạy sau. `logs/` đã được loại khỏi Git. Consumer chỉ ACK sau khi ghi và flush log xuống đĩa. Nếu không ghi được file, chương trình thoát với mã lỗi 1; sửa đường dẫn/quyền rồi chạy lại để nhận lại message chưa ACK. Một lần ghi thành công nhưng mất kết nối trước ACK vẫn có thể dẫn tới log trùng khi message được giao lại.
 
-## 5. Dừng, kiểm thử và ý nghĩa lưu trữ
+## 6. Dừng, kiểm thử và ý nghĩa lưu trữ
 
 Nhấn **Ctrl+C** để dừng chương trình đang chờ hoặc phát liên tục. Mọi consumer hỗ trợ `--max-messages N`: mặc định `0` là chờ liên tục; số dương khiến consumer dừng sau N thông điệp **hợp lệ**. Ví dụ `python consumer_bai1.py --max-messages 1`. Mọi chương trình hỗ trợ `--help`.
 
@@ -245,7 +253,7 @@ Lệnh này tự tạo một RabbitMQ container riêng trên cổng localhost ng
 
 Các khối output ở phần hướng dẫn phía trên là ví dụ minh họa; giá trị ngẫu nhiên và thời gian thực tế sẽ khác. Họ tên và mã sinh viên khi nộp bài do bạn truyền vào ở Bài 1.
 
-## 6. Xử lý lỗi thường gặp
+## 7. Xử lý lỗi thường gặp
 
 | Triệu chứng | Cách kiểm tra |
 | --- | --- |
@@ -256,7 +264,7 @@ Các khối output ở phần hướng dẫn phía trên là ví dụ minh họa
 | Consumer không thấy thông điệp | Đảm bảo producer và consumer dùng cùng broker/vhost. Kiểm tra queue trong trang quản trị; consumer khác cùng queue có thể đã nhận. Hai consumer warning/critical không nhận `info` là đúng thiết kế; dùng `all_alerts_consumer_bai3.py` để nhận cả ba mức. |
 | Consumer tất cả cảnh báo báo lỗi ghi file | Kiểm tra `--log-file` là đường dẫn file và thư mục có quyền ghi; chạy lại sau khi sửa để nhận message chưa ACK. |
 
-## 7. Tệp chương trình và tài liệu tham khảo
+## 8. Tệp chương trình và tài liệu tham khảo
 
 Bảy chương trình của bài thực hành: `producer_bai1.py`, `consumer_bai1.py`, `sensor_producer_bai2.py`, `monitor_consumer_bai2.py`, `alert_producer_bai3.py`, `warning_consumer_bai3.py`, `critical_consumer_bai3.py`. Chương trình mở rộng thứ tám là `all_alerts_consumer_bai3.py`. Giữ kèm module dùng chung `amqp_common.py`, `requirements.txt`, `compose.yaml` và tài liệu này khi sao chép dự án.
 

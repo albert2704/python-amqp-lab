@@ -17,7 +17,7 @@ Moi bai can hai terminal da kich hoat .venv. Chay subscriber/device truoc.
 
 Bai 1:
   python subscriber_bai1.py
-  python publisher_bai1.py --name "Ho ten cua ban" --student-id "Ma sinh vien cua ban"
+  python publisher_bai1.py --name "Nguyễn Hoàng Quốc Việt" --student-id "B22DCCN897"
   Ket qua: nhan topic iot/lab/message, loi chao, danh tinh va thoi diem nhan.
 
 Bai 2:
